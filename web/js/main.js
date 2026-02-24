@@ -1,6 +1,7 @@
 /**
  * 字幕核对工具 - 主 JavaScript 文件
  * 处理文件选择、文本比对、高亮显示和实时编辑功能
+ * 已适配 Vercel Serverless Functions API
  */
 
 // 全局变量：存储当前文件状态
@@ -9,6 +10,72 @@ let currentFile2 = null;
 let isComparing = false;
 let scrollSyncEnabled = true;
 let isScrolling = false; // 用于防止滚动同步时的循环触发
+
+/**
+ * API 调用：加载文件
+ * @param {string} fileName - 文件名
+ * @param {string} base64Content - base64 编码的文件内容
+ * @param {string} fileExtension - 文件扩展名
+ * @param {number} fileIndex - 文件索引
+ * @returns {Promise<Object>} 文件加载结果
+ */
+async function loadFileFromAPI(fileName, base64Content, fileExtension, fileIndex) {
+    try {
+        const response = await fetch('/api/load_file', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                file_name: fileName,
+                file_content: base64Content,
+                file_extension: fileExtension,
+                file_index: fileIndex
+            })
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+        }
+        
+        return await response.json();
+    } catch (error) {
+        console.error('API 调用错误:', error);
+        throw error;
+    }
+}
+
+/**
+ * API 调用：比对文本
+ * @param {string} text1 - 第一个文本
+ * @param {string} text2 - 第二个文本
+ * @returns {Promise<Object>} 比对结果
+ */
+async function compareFilesAPI(text1, text2) {
+    try {
+        const response = await fetch('/api/compare', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                text1: text1,
+                text2: text2
+            })
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+        }
+        
+        return await response.json();
+    } catch (error) {
+        console.error('API 调用错误:', error);
+        throw error;
+    }
+}
 
 /**
  * 选择文件
@@ -58,8 +125,8 @@ async function handleFileSelect(event) {
                     // 将文本内容转换为 base64 编码
                     const base64Content = btoa(unescape(encodeURIComponent(fileContent)));
                     
-                    // 调用 Python 后端加载文件
-                    const result = await eel.load_file_from_content(fileName, base64Content, fileExtension, fileIndex)();
+                    // 调用 API 加载文件
+                    const result = await loadFileFromAPI(fileName, base64Content, fileExtension, fileIndex);
                     
                     handleFileLoadResult(result, fileIndex, fileName);
                 } catch (error) {
@@ -80,8 +147,8 @@ async function handleFileSelect(event) {
                     const binary = String.fromCharCode.apply(null, bytes);
                     const base64Content = btoa(binary);
                     
-                    // 调用 Python 后端加载文件
-                    const result = await eel.load_file_from_content(fileName, base64Content, fileExtension, fileIndex)();
+                    // 调用 API 加载文件
+                    const result = await loadFileFromAPI(fileName, base64Content, fileExtension, fileIndex);
                     
                     handleFileLoadResult(result, fileIndex, fileName);
                 } catch (error) {
@@ -122,7 +189,7 @@ function handleFileLoadResult(result, fileIndex, fileName) {
         const editor = document.getElementById(`editor${fileIndex}`);
         editor.textContent = result.normalized_text;
         
-        // 存储当前文件信息
+        // 存储当前文件信息（在客户端存储，因为 Serverless Functions 是无状态的）
         if (fileIndex === 1) {
             currentFile1 = {
                 path: fileName,
@@ -167,16 +234,12 @@ async function performCompare() {
         const normalized1 = document.getElementById('editor1').textContent;
         const normalized2 = document.getElementById('editor2').textContent;
         
-        // 更新后端规范化内容（用户编辑的是规范化文本）
-        await eel.update_file_content(1, normalized1)();
-        await eel.update_file_content(2, normalized2)();
-        
-        // 更新本地存储
+        // 更新本地存储（客户端管理状态）
         currentFile1.normalized = normalized1;
         currentFile2.normalized = normalized2;
         
-        // 执行比对（使用规范化文本直接比对，因为显示的就是规范化文本）
-        const result = await eel.compare_files()();
+        // 调用 API 执行比对（使用规范化文本直接比对，因为显示的就是规范化文本）
+        const result = await compareFilesAPI(normalized1, normalized2);
         
         if (result.success) {
             // 应用高亮显示（比对结果直接对应规范化文本）
@@ -274,8 +337,12 @@ function onEditorInput(fileIndex) {
     const editor = document.getElementById(`editor${fileIndex}`);
     const text = editor.textContent || editor.innerText;
     
-    // 更新后端内容
-    eel.update_file_content(fileIndex, text)();
+    // 更新本地存储（客户端管理状态，无需调用服务器）
+    if (fileIndex === 1 && currentFile1) {
+        currentFile1.normalized = text;
+    } else if (fileIndex === 2 && currentFile2) {
+        currentFile2.normalized = text;
+    }
     
     // 自动重新比对（延迟执行，避免频繁比对）
     if (currentFile1 && currentFile2) {
@@ -490,8 +557,8 @@ async function handleDrop(event, fileIndex) {
                     // 将文本内容转换为 base64 编码
                     const base64Content = btoa(unescape(encodeURIComponent(fileContent)));
                     
-                    // 调用 Python 后端加载文件
-                    const result = await eel.load_file_from_content(fileName, base64Content, fileExtension, fileIndex)();
+                    // 调用 API 加载文件
+                    const result = await loadFileFromAPI(fileName, base64Content, fileExtension, fileIndex);
                     
                     handleFileLoadResult(result, fileIndex, fileName);
                 } catch (error) {
@@ -511,8 +578,8 @@ async function handleDrop(event, fileIndex) {
                     const binary = String.fromCharCode.apply(null, bytes);
                     const base64Content = btoa(binary);
                     
-                    // 调用 Python 后端加载文件
-                    const result = await eel.load_file_from_content(fileName, base64Content, fileExtension, fileIndex)();
+                    // 调用 API 加载文件
+                    const result = await loadFileFromAPI(fileName, base64Content, fileExtension, fileIndex);
                     
                     handleFileLoadResult(result, fileIndex, fileName);
                 } catch (error) {
